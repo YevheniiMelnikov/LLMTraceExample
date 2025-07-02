@@ -15,10 +15,15 @@ assert lf.auth_check(), "Langfuse creds / host invalid"
 
 EVALUATOR_ID = "91e737ff-4706-4521-9fe1-660cdbca5e2e"
 DATASET_PATH = "./dataset.json"
+DATASET_NAME = "summarizer"
 SYSTEM_PROMPT = "Summarize the following technical description in 3-4 sentences."
 
 
-def run_evaluation_from_local_dataset(path: str) -> None:
+def my_eval_fn(inp: str, out: str, ref: str) -> float:
+    return 1.0 if ref in out else 0.0
+
+
+def run_local(path: str) -> None:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -67,6 +72,45 @@ def run_evaluation_from_local_dataset(path: str) -> None:
                 )
 
 
+def run_remote(dataset_name: str) -> None:
+    dataset = lf.get_dataset(dataset_name)
+
+    for item in dataset.items:
+        with item.run(
+            run_name="summary-eval-run",
+            run_description="LLM summary + eval",
+            run_metadata={"model": "gpt-4o"},
+        ) as root:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": item.input},
+            ]
+            with lf.start_as_current_generation(
+                name="generate_summary",
+                model="gpt-4o",
+                input=messages,
+            ) as gen:
+                resp = openai.chat.completions.create(
+                    model="gpt-4o",
+                    messages=messages,
+                    temperature=0.3,
+                )
+                summary = resp.choices[0].message.content.strip()
+                gen.update(output=summary)
+
+            root.score_trace(
+                name="faithfulness-test",
+                value=my_eval_fn(item.input, summary, item.expected_output),
+                comment="string match for now",
+            )
+
+
 if __name__ == "__main__":
-    run_evaluation_from_local_dataset(DATASET_PATH)
+    mode = input("Выбери режим: [1] локальный JSON, [2] UI-датасет Langfuse: ").strip()
+    if mode == "1":
+        run_local(DATASET_PATH)
+    elif mode == "2":
+        run_remote(DATASET_NAME)
+    else:
+        print("Неверный режим.")
     lf.flush()
