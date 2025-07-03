@@ -4,7 +4,8 @@ import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from phoenix.evals import OpenAIModel, QAEvaluator, run_evals
+from phoenix.evals import OpenAIModel, run_evals
+from phoenix.evals.evaluators import SummarizationEvaluator
 from phoenix.otel import register
 from openinference.instrumentation.openai import OpenAIInstrumentor
 from opentelemetry import trace
@@ -61,13 +62,13 @@ def run_summary_eval(path: str) -> None:
     df = pd.DataFrame(records).set_index("context.span_id")
     print("Model predictions generated. Starting evaluations...")
 
-    eval_model = OpenAIModel(model="gpt-4o")
-    qa_evaluator = QAEvaluator(eval_model)
+    # --- SummarizationEvaluator (0‒1 score) ----------------------------------
+    summarization_eval = SummarizationEvaluator(OpenAIModel(model="gpt-4o"))
 
     evals_df = run_evals(
         dataframe=df,
-        evaluators=[qa_evaluator],
-        provide_explanation=True
+        evaluators=[summarization_eval],
+        provide_explanation=True          # explanation появится в UI
     )[0]
 
     results_df = pd.concat([df, evals_df], axis=1)
@@ -81,4 +82,3 @@ def run_summary_eval(path: str) -> None:
 
 if __name__ == "__main__":
     run_summary_eval(DATASET_PATH)
-
