@@ -4,14 +4,16 @@ import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
 from phoenix.evals import OpenAIModel, QAEvaluator, run_evals
-from phoenix.trace.tracer import Tracer
-from phoenix.trace.span import SpanKind
+from phoenix.otel import register
+from openinference.instrumentation.openai import OpenAIInstrumentor
 
 load_dotenv()
 print("Phoenix is running on Docker at http://localhost:6006")
 
+# set up tracing for the OpenAI client
+tracer_provider = register()
+OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
 client = OpenAI()
-tracer = Tracer(service_name="summarizer")
 
 DATASET_PATH = "./dataset.json"
 SYSTEM_PROMPT = "Summarize the following technical description in 3-4 sentences."
@@ -32,19 +34,12 @@ def run_summary_eval(path: str) -> None:
             {"role": "user", "content": input_text},
         ]
 
-        with tracer.start_as_current_span(
-            name="generate_summary",
-            kind=SpanKind.LLM,
-            attributes={"model": "gpt-4o"}
-        ) as span:
-            resp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                temperature=0.3,
-            )
-            output_text = resp.choices[0].message.content.strip()
-            span.set_attribute("input", input_text)
-            span.set_attribute("output", output_text)
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.3,
+        )
+        output_text = resp.choices[0].message.content.strip()
 
         records.append({
             "input": input_text,
