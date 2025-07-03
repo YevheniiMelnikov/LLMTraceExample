@@ -1,78 +1,71 @@
-import os
 import json
+from pathlib import Path
+
 import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
+from opentelemetry import trace
+
+from phoenix.otel import register
 from phoenix.evals import OpenAIModel, QAEvaluator, run_evals
-from phoenix.trace.tracer import Tracer
-from phoenix.trace.span import SpanKind
+from phoenix.trace import SpanEvaluations, log_span_evaluations
+from openinference.instrumentation.openai import OpenAIInstrumentor
 
+# --- подключаемся к Phoenix через OpenTelemetry -----------------------------
+register(project_name="default", batch=True)  # 👈 фикс: имя проекта = default
+OpenAIInstrumentor().instrument()
+tracer = trace.get_tracer("summarizer")
+
+# --- загрузка ENV и OpenAI клиента -----------------------------------------
 load_dotenv()
-print("Phoenix is running on Docker at http://localhost:6006")
-
 client = OpenAI()
-tracer = Tracer(service_name="summarizer")
 
-DATASET_PATH = "./dataset.json"
+# --- пути и системный prompt ------------------------------------------------
+DATASET_PATH = Path("dataset.json")
 SYSTEM_PROMPT = "Summarize the following technical description in 3-4 sentences."
 
-def run_summary_eval(path: str) -> None:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    records = []
-    print("Generating model predictions...")
+# --- основной запуск --------------------------------------------------------
+def run_summary_eval(path: Path) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    rows = []
 
     for item in data:
-        input_text = item["input"]
-        expected_output = item["expected_output"]
-
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": input_text},
-        ]
-
-        with tracer.start_as_current_span(
-            name="generate_summary",
-            kind=SpanKind.LLM,
-            attributes={"model": "gpt-4o"}
-        ) as span:
+        with tracer.start_as_current_span("generate_summary") as span:
             resp = client.chat.completions.create(
                 model="gpt-4o",
-                messages=messages,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": item["input"]},
+                ],
                 temperature=0.3,
             )
-            output_text = resp.choices[0].message.content.strip()
-            span.set_attribute("input", input_text)
-            span.set_attribute("output", output_text)
+            output = resp.choices[0].message.content.strip()
+            span.set_attribute("input", item["input"])
+            span.set_attribute("output", output)
+            span_id = span.get_span_context().span_id.to_bytes(8, "big").hex()
 
-        records.append({
-            "input": input_text,
-            "output": output_text,
-            "reference": expected_output
+        rows.append({
+            "context.span_id": span_id,  # 👈 нужен для привязки eval к спану
+            "input": item["input"],
+            "output": output,
+            "reference": item["expected_output"],
         })
 
-    df = pd.DataFrame(records)
-    print("Model predictions generated. Starting evaluations...")
+    df = pd.DataFrame(rows).set_index("context.span_id")
 
-    eval_model = OpenAIModel(model="gpt-4o")
-    qa_evaluator = QAEvaluator(eval_model)
-
-    evals_df = run_evals(
-        dataframe=df,
-        evaluators=[qa_evaluator],
-        provide_explanation=True
+    eval_df = run_evals(
+        df,
+        evaluators=[QAEvaluator(OpenAIModel(model="gpt-4o"))],
+        provide_explanation=True,
     )[0]
 
-    results_df = pd.concat([df, evals_df], axis=1)
+    log_span_evaluations(SpanEvaluations(
+        dataframe=eval_df,
+        eval_name="QA-score"
+    ))
 
-    print("✅ Done: evaluations complete. Check the Phoenix UI.")
-    print("Evaluation results:")
-    print(results_df.head())
-
-    print(f"\nPhoenix UI is running at: http://localhost:6006")
-    input("Press Enter to close the script...\n")
-
+    trace.get_tracer_provider().force_flush()
+    print("✅ Всё отправлено в Phoenix: http://localhost:6006")
 
 if __name__ == "__main__":
     run_summary_eval(DATASET_PATH)
