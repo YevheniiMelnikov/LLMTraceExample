@@ -4,14 +4,14 @@ import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
 from phoenix.evals import OpenAIModel, QAEvaluator, run_evals
-from phoenix.trace.tracer import Tracer
-from phoenix.trace.span import SpanKind
+from openinference.instrumentation import TracerProvider
+from phoenix.trace.schemas import SpanKind
 
 load_dotenv()
 print("Phoenix is running on Docker at http://localhost:6006")
 
 client = OpenAI()
-tracer = Tracer(service_name="summarizer")
+tracer = TracerProvider().get_tracer("summarizer")
 
 DATASET_PATH = "./dataset.json"
 SYSTEM_PROMPT = "Summarize the following technical description in 3-4 sentences."
