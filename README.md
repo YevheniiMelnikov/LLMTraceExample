@@ -73,3 +73,30 @@ If everything works, the script prints the trace ID and generation ID (Langfuse)
 * The `langfuse.openai` module wraps OpenAI’s client and logs requests automatically.
 * The Phoenix `OpenAIJudge` uses GPT-4o to evaluate your app’s predictions vs references.
 * You can run both tools side-by-side and compare how they track quality and traceability.
+
+## Decorator Example
+
+The `langfuse_decorator.py` script shows how to hide the tracing boilerplate in
+a decorator.  Simply annotate your generation function with
+`evaluate_with_langfuse()` and call it once to run evaluation for every dataset
+item:
+
+```python
+@evaluate_with_langfuse(
+    dataset_path="./dataset.json",
+    dataset_name="summarizer",
+    model="gpt-4o",
+    mode="local",
+    eval_fn=my_eval_fn,
+)
+def summarize(text: str) -> str:
+    ...
+
+summarize()
+```
+
+Run it with:
+
+```bash
+uv run python langfuse_decorator.py
+```
